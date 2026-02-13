@@ -99,9 +99,9 @@ fi
 
 info "Removing worktree clone: ${TARGET_PROJECT} (${TARGET_DIR})"
 
-# Stop DDEV project if running
-info "Stopping DDEV project..."
-(cd "$TARGET_DIR" && ddev stop --unlist 2>/dev/null) || warn "Could not stop DDEV project (may already be stopped)"
+# Stop and fully remove DDEV project data (containers, volumes, etc.)
+info "Removing DDEV project..."
+(cd "$TARGET_DIR" && ddev delete --omit-snapshot -y 2>/dev/null) || warn "Could not delete DDEV project (may already be removed)"
 
 # Check if this is a git worktree
 IS_WORKTREE=false
