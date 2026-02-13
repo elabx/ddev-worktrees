@@ -1,0 +1,128 @@
+#!/bin/bash
+
+## Description: Remove a DDEV worktree clone created by 'ddev worktree'
+## Usage: worktree-remove <name> [flags]
+## Example: ddev worktree-remove feature-branch\nddev worktree-remove --list
+## Flags: [{"Name":"list","Type":"bool","Usage":"List all worktree clones for this project"}]
+
+set -euo pipefail
+
+# ── Helpers ──────────────────────────────────────────────────────────────────
+
+die() { printf "\033[31mError:\033[0m %s\n" "$1" >&2; exit 1; }
+info() { printf "\033[34m→\033[0m %s\n" "$1"; }
+success() { printf "\033[32m✓\033[0m %s\n" "$1"; }
+warn() { printf "\033[33m!\033[0m %s\n" "$1"; }
+
+sanitize_name() {
+    echo "$1" | sed 's|[/\\]|-|g; s|[^a-zA-Z0-9._-]|-|g; s|-\{2,\}|-|g; s|^-||; s|-$||'
+}
+
+# ── Arg parsing ──────────────────────────────────────────────────────────────
+
+NAME=""
+LIST_MODE=false
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --list)  LIST_MODE=true; shift ;;
+        -*)      die "Unknown flag: $1" ;;
+        *)
+            if [[ -z "$NAME" ]]; then
+                NAME="$1"
+            else
+                die "Unexpected argument: $1"
+            fi
+            shift
+            ;;
+    esac
+done
+
+# ── Resolve source project ──────────────────────────────────────────────────
+
+SOURCE_DIR="$(pwd)"
+SOURCE_DDEV_DIR="${SOURCE_DIR}/.ddev"
+
+[[ -d "$SOURCE_DDEV_DIR" ]] || die "This does not appear to be a DDEV project (no .ddev/ directory)"
+
+SOURCE_PROJECT=$(yq eval '.name // ""' "${SOURCE_DDEV_DIR}/config.yaml" 2>/dev/null || grep -E '^name:' "${SOURCE_DDEV_DIR}/config.yaml" 2>/dev/null | head -1 | sed 's/^name:[[:space:]]*//')
+[[ -n "$SOURCE_PROJECT" ]] || die "Could not determine project name from .ddev/config.yaml"
+
+SOURCE_DIRNAME=$(basename "$SOURCE_DIR")
+PARENT_DIR=$(dirname "$SOURCE_DIR")
+
+# ── List mode ────────────────────────────────────────────────────────────────
+
+if $LIST_MODE; then
+    echo "Worktree clones for project '${SOURCE_PROJECT}':"
+    echo ""
+    found=0
+    for dir in "${PARENT_DIR}/${SOURCE_DIRNAME}-"*/; do
+        [[ -d "$dir" ]] || continue
+        config_wt="${dir}.ddev/config.worktree.yaml"
+        if [[ -f "$config_wt" ]]; then
+            wt_name=$(grep -E '^name:' "$config_wt" 2>/dev/null | head -1 | sed 's/^name:[[:space:]]*//')
+            # Check if the worktree project name starts with our source project
+            if [[ "$wt_name" == "${SOURCE_PROJECT}-"* ]]; then
+                suffix="${wt_name#${SOURCE_PROJECT}-}"
+                status="stopped"
+                if ddev describe -j "$wt_name" 2>/dev/null | grep -q '"status":"running"' 2>/dev/null; then
+                    status="running"
+                fi
+                printf "  %-30s %-12s %s\n" "$suffix" "($status)" "$dir"
+                found=$((found + 1))
+            fi
+        fi
+    done
+    if [[ $found -eq 0 ]]; then
+        echo "  (none found)"
+    fi
+    echo ""
+    exit 0
+fi
+
+# ── Remove mode ──────────────────────────────────────────────────────────────
+
+[[ -n "$NAME" ]] || die "Usage: ddev worktree-remove <name> [--list]"
+
+SANITIZED=$(sanitize_name "$NAME")
+TARGET_DIR="${PARENT_DIR}/${SOURCE_DIRNAME}-${SANITIZED}"
+TARGET_PROJECT="${SOURCE_PROJECT}-${SANITIZED}"
+
+[[ -d "$TARGET_DIR" ]] || die "Directory not found: ${TARGET_DIR}"
+
+# Safety check: only remove dirs that have config.worktree.yaml
+CONFIG_WORKTREE="${TARGET_DIR}/.ddev/config.worktree.yaml"
+if [[ ! -f "$CONFIG_WORKTREE" ]]; then
+    die "Safety check failed: ${TARGET_DIR} does not contain .ddev/config.worktree.yaml\nThis directory was not created by 'ddev worktree' — refusing to remove."
+fi
+
+info "Removing worktree clone: ${TARGET_PROJECT} (${TARGET_DIR})"
+
+# Stop DDEV project if running
+info "Stopping DDEV project..."
+(cd "$TARGET_DIR" && ddev stop --unlist 2>/dev/null) || warn "Could not stop DDEV project (may already be stopped)"
+
+# Check if this is a git worktree
+IS_WORKTREE=false
+if git -C "$SOURCE_DIR" worktree list 2>/dev/null | grep -q "$(cd "$TARGET_DIR" && pwd)"; then
+    IS_WORKTREE=true
+fi
+
+if $IS_WORKTREE; then
+    info "Removing git worktree..."
+    git -C "$SOURCE_DIR" worktree remove --force "$TARGET_DIR" || {
+        warn "git worktree remove failed — falling back to manual removal"
+        rm -rf "$TARGET_DIR"
+        git -C "$SOURCE_DIR" worktree prune 2>/dev/null || true
+    }
+    success "Git worktree removed"
+else
+    info "Removing directory..."
+    rm -rf "$TARGET_DIR" || die "Failed to remove ${TARGET_DIR}"
+    success "Directory removed"
+fi
+
+echo ""
+success "Worktree clone '${SANITIZED}' removed successfully!"
+echo ""

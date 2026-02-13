@@ -1,0 +1,19 @@
+name: ddev-worktree
+
+global_files:
+  - commands/host/worktree
+  - commands/host/worktree-remove
+
+ddev_version_constraint: '>= v1.24.0'
+
+pre_install_actions: []
+
+post_install_actions:
+  - chmod +x ~/.ddev/commands/host/worktree
+  - chmod +x ~/.ddev/commands/host/worktree-remove
+
+removal_actions:
+  - rm -f ~/.ddev/commands/host/worktree
+  - rm -f ~/.ddev/commands/host/worktree-remove
+
+yaml_read_files: {}

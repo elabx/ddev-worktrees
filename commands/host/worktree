@@ -1,0 +1,386 @@
+#!/bin/bash
+
+## Description: Clone a DDEV project into a git worktree (or rsync copy) with its database
+## Usage: worktree <branch-or-name> [flags]
+## Example: ddev worktree feature-branch\nddev worktree hotfix --profile=minimal --no-db
+## Flags: [{"Name":"profile","Type":"string","Usage":"Profile from .ddev/worktree.yaml to use"},{"Name":"no-db","Type":"bool","Usage":"Skip database export/import"},{"Name":"no-start","Type":"bool","Usage":"Create files but don't start DDEV or run post_create"},{"Name":"force","Shorthand":"f","Type":"bool","Usage":"Overwrite existing target directory"}]
+
+set -euo pipefail
+
+# ── Helpers ──────────────────────────────────────────────────────────────────
+
+die() { printf "\033[31mError:\033[0m %s\n" "$1" >&2; exit 1; }
+info() { printf "\033[34m→\033[0m %s\n" "$1"; }
+success() { printf "\033[32m✓\033[0m %s\n" "$1"; }
+warn() { printf "\033[33m!\033[0m %s\n" "$1"; }
+
+sanitize_name() {
+    echo "$1" | sed 's|[/\\]|-|g; s|[^a-zA-Z0-9._-]|-|g; s|-\{2,\}|-|g; s|^-||; s|-$||'
+}
+
+# ── YAML parsing ────────────────────────────────────────────────────────────
+# Uses yq if available, otherwise falls back to grep/awk for simple values.
+
+HAS_YQ=false
+if command -v yq &>/dev/null; then
+    HAS_YQ=true
+fi
+
+yaml_get() {
+    # yaml_get <file> <dotpath>  — returns scalar value
+    local file="$1" path="$2"
+    if $HAS_YQ; then
+        yq eval "$path // \"\"" "$file" 2>/dev/null
+    else
+        # Fallback: only handles simple top-level keys
+        local key="${path##*.}"
+        grep -E "^${key}:" "$file" 2>/dev/null | head -1 | sed 's/^[^:]*:[[:space:]]*//' | sed 's/^["'"'"']//;s/["'"'"']$//'
+    fi
+}
+
+yaml_get_list() {
+    # yaml_get_list <file> <dotpath>  — returns one item per line
+    local file="$1" path="$2"
+    if $HAS_YQ; then
+        yq eval "${path}[]" "$file" 2>/dev/null
+    else
+        # Fallback: not supported without yq for nested lists
+        return 1
+    fi
+}
+
+yaml_profile_list_field() {
+    # yaml_profile_list_field <file> <profile> <field>  — returns items of profiles.<profile>.<field>[]
+    local file="$1" profile="$2" field="$3"
+    if $HAS_YQ; then
+        yq eval ".profiles.${profile}.${field}[]" "$file" 2>/dev/null
+    else
+        # Fallback: basic parsing for profiles.<name>.<field> list items
+        # Looks for lines like "      - value" under the correct section
+        awk -v profile="$profile" -v field="$field" '
+        BEGIN { in_profiles=0; in_profile=0; in_field=0 }
+        /^profiles:/ { in_profiles=1; next }
+        in_profiles && /^[^ ]/ { in_profiles=0 }
+        in_profiles && $0 ~ "^  " profile ":" { in_profile=1; next }
+        in_profile && /^  [^ ]/ && $0 !~ "^  " profile ":" { in_profile=0 }
+        in_profile && /^    [^ ]/ && $0 !~ "^    " field ":" {
+            if (in_field) in_field=0
+        }
+        in_profile && $0 ~ "^    " field ":" { in_field=1; next }
+        in_field && /^      - / { sub(/^      - /, ""); print }
+        in_field && /^    [^ ]/ { in_field=0 }
+        ' "$file" 2>/dev/null
+    fi
+}
+
+yaml_list_profiles() {
+    # yaml_list_profiles <file>  — returns profile names, one per line
+    local file="$1"
+    if $HAS_YQ; then
+        yq eval '.profiles | keys | .[]' "$file" 2>/dev/null
+    else
+        awk '
+        BEGIN { in_profiles=0 }
+        /^profiles:/ { in_profiles=1; next }
+        in_profiles && /^[^ ]/ { exit }
+        in_profiles && /^  [a-zA-Z_][a-zA-Z0-9_-]*:/ {
+            sub(/:.*/, ""); sub(/^  /, ""); print
+        }
+        ' "$file" 2>/dev/null
+    fi
+}
+
+# ── Arg parsing ──────────────────────────────────────────────────────────────
+
+BRANCH=""
+PROFILE_FLAG=""
+NO_DB=false
+NO_START=false
+FORCE=false
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --profile=*) PROFILE_FLAG="${1#--profile=}"; shift ;;
+        --profile)   PROFILE_FLAG="$2"; shift 2 ;;
+        --no-db)     NO_DB=true; shift ;;
+        --no-start)  NO_START=true; shift ;;
+        --force|-f)  FORCE=true; shift ;;
+        -*)          die "Unknown flag: $1" ;;
+        *)
+            if [[ -z "$BRANCH" ]]; then
+                BRANCH="$1"
+            else
+                die "Unexpected argument: $1"
+            fi
+            shift
+            ;;
+    esac
+done
+
+[[ -n "$BRANCH" ]] || die "Usage: ddev worktree <branch-or-name> [--profile=NAME] [--no-db] [--no-start] [--force]"
+
+# ── Resolve source project ──────────────────────────────────────────────────
+
+SOURCE_DIR="$(pwd)"
+SOURCE_DDEV_DIR="${SOURCE_DIR}/.ddev"
+
+[[ -d "$SOURCE_DDEV_DIR" ]] || die "This does not appear to be a DDEV project (no .ddev/ directory)"
+
+SOURCE_PROJECT=$(yq eval '.name // ""' "${SOURCE_DDEV_DIR}/config.yaml" 2>/dev/null || grep -E '^name:' "${SOURCE_DDEV_DIR}/config.yaml" 2>/dev/null | head -1 | sed 's/^name:[[:space:]]*//')
+[[ -n "$SOURCE_PROJECT" ]] || die "Could not determine project name from .ddev/config.yaml"
+
+SANITIZED=$(sanitize_name "$BRANCH")
+[[ -n "$SANITIZED" ]] || die "Branch name '$BRANCH' sanitizes to empty string"
+
+SOURCE_DIRNAME=$(basename "$SOURCE_DIR")
+TARGET_DIR="$(dirname "$SOURCE_DIR")/${SOURCE_DIRNAME}-${SANITIZED}"
+TARGET_PROJECT="${SOURCE_PROJECT}-${SANITIZED}"
+
+info "Source project: ${SOURCE_PROJECT} (${SOURCE_DIR})"
+info "Target project: ${TARGET_PROJECT} (${TARGET_DIR})"
+
+# ── Read worktree.yaml config ───────────────────────────────────────────────
+
+WORKTREE_CONFIG="${SOURCE_DDEV_DIR}/worktree.yaml"
+PROFILE=""
+COPY_PATHS=()
+POST_CREATE_CMDS=()
+
+if [[ -f "$WORKTREE_CONFIG" ]]; then
+    if ! $HAS_YQ; then
+        warn "yq not found — falling back to basic YAML parsing (install yq for full support)"
+    fi
+
+    # Determine which profile to use
+    if [[ -n "$PROFILE_FLAG" ]]; then
+        PROFILE="$PROFILE_FLAG"
+    else
+        DEFAULT_PROFILE=$(yaml_get "$WORKTREE_CONFIG" ".default_profile")
+        PROFILE="${DEFAULT_PROFILE:-full}"
+    fi
+
+    # Verify profile exists
+    AVAILABLE_PROFILES=$(yaml_list_profiles "$WORKTREE_CONFIG")
+    if [[ -n "$AVAILABLE_PROFILES" ]]; then
+        if ! echo "$AVAILABLE_PROFILES" | grep -qx "$PROFILE"; then
+            echo "Available profiles:" >&2
+            echo "$AVAILABLE_PROFILES" | sed 's/^/  - /' >&2
+            die "Profile '${PROFILE}' not found in ${WORKTREE_CONFIG}"
+        fi
+        info "Using profile: ${PROFILE}"
+
+        # Read copy paths
+        while IFS= read -r path; do
+            [[ -n "$path" ]] && COPY_PATHS+=("$path")
+        done < <(yaml_profile_list_field "$WORKTREE_CONFIG" "$PROFILE" "copy")
+
+        # Read post_create commands
+        while IFS= read -r cmd; do
+            [[ -n "$cmd" ]] && POST_CREATE_CMDS+=("$cmd")
+        done < <(yaml_profile_list_field "$WORKTREE_CONFIG" "$PROFILE" "post_create")
+    fi
+else
+    info "No .ddev/worktree.yaml found — skipping profile-based copy/post_create"
+fi
+
+# ── Preflight checks ────────────────────────────────────────────────────────
+
+if [[ -d "$TARGET_DIR" ]]; then
+    if $FORCE; then
+        warn "Target directory exists — removing (--force)"
+        # If it's a git worktree, remove it properly
+        if git worktree list 2>/dev/null | grep -q "$(cd "$TARGET_DIR" 2>/dev/null && pwd)"; then
+            git worktree remove --force "$TARGET_DIR" 2>/dev/null || true
+        fi
+        # Stop DDEV if running
+        (cd "$TARGET_DIR" && ddev stop --unlist 2>/dev/null) || true
+        rm -rf "$TARGET_DIR"
+    else
+        die "Target directory already exists: ${TARGET_DIR}\nUse --force to overwrite."
+    fi
+fi
+
+# Check for project name collision
+if ddev list 2>/dev/null | grep -qw "$TARGET_PROJECT"; then
+    if $FORCE; then
+        warn "Project '${TARGET_PROJECT}' already registered — will overwrite"
+        ddev stop --unlist "$TARGET_PROJECT" 2>/dev/null || true
+    else
+        die "A DDEV project named '${TARGET_PROJECT}' already exists.\nUse --force to overwrite."
+    fi
+fi
+
+# ── Export database ──────────────────────────────────────────────────────────
+
+DB_DUMP=""
+if ! $NO_DB; then
+    DB_DUMP=$(mktemp "/tmp/ddev-worktree-db-XXXXXX.sql.gz")
+
+    # Make sure source project is running for DB export
+    SOURCE_STATUS=$(ddev describe -j 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('raw',{}).get('status',''))" 2>/dev/null || echo "")
+    if [[ "$SOURCE_STATUS" != "running" ]]; then
+        info "Starting source project for database export..."
+        ddev start
+    fi
+
+    info "Exporting database from ${SOURCE_PROJECT}..."
+    ddev export-db --gzip --file="$DB_DUMP" || die "Database export failed"
+    success "Database exported"
+fi
+
+# ── Create target directory ──────────────────────────────────────────────────
+
+IS_GIT=false
+if [[ -d "${SOURCE_DIR}/.git" ]] || git rev-parse --git-dir &>/dev/null 2>&1; then
+    IS_GIT=true
+fi
+
+if $IS_GIT; then
+    info "Creating git worktree for '${BRANCH}'..."
+
+    # Determine if the branch exists locally, remotely, or needs creation
+    if git show-ref --verify --quiet "refs/heads/${BRANCH}" 2>/dev/null; then
+        # Local branch exists
+        git worktree add "$TARGET_DIR" "$BRANCH" || die "git worktree add failed"
+    elif git show-ref --verify --quiet "refs/remotes/origin/${BRANCH}" 2>/dev/null; then
+        # Remote branch exists — create local tracking branch
+        git worktree add --track -b "$BRANCH" "$TARGET_DIR" "origin/${BRANCH}" || die "git worktree add failed"
+    else
+        # Branch doesn't exist — create new branch from HEAD
+        info "Branch '${BRANCH}' does not exist — creating from HEAD"
+        git worktree add -b "$BRANCH" "$TARGET_DIR" || die "git worktree add failed"
+    fi
+    success "Git worktree created at ${TARGET_DIR}"
+else
+    info "No git repo detected — copying files with rsync..."
+    rsync -a \
+        --exclude='.ddev/.ddev-docker-*' \
+        --exclude='.ddev/.homeadditions' \
+        --exclude='.ddev/.sso' \
+        --exclude='.ddev/db_snapshots' \
+        --exclude='.ddev/.importdb*' \
+        --exclude='.ddev/sequelpro.spf' \
+        --exclude='.ddev/import.yaml' \
+        --exclude='.ddev/.webimageExtraPackages' \
+        --exclude='.ddev/.dbimageExtraPackages' \
+        "$SOURCE_DIR/" "$TARGET_DIR/" || die "rsync failed"
+    success "Files copied to ${TARGET_DIR}"
+fi
+
+# ── Ensure .ddev/ exists in target (may be gitignored) ──────────────────────
+
+if [[ ! -d "${TARGET_DIR}/.ddev" ]]; then
+    info "Copying .ddev/ from source (appears to be gitignored)..."
+    rsync -a \
+        --exclude='.ddev-docker-*' \
+        --exclude='.homeadditions' \
+        --exclude='.sso' \
+        --exclude='db_snapshots' \
+        --exclude='.importdb*' \
+        --exclude='sequelpro.spf' \
+        --exclude='import.yaml' \
+        --exclude='.webimageExtraPackages' \
+        --exclude='.dbimageExtraPackages' \
+        "${SOURCE_DDEV_DIR}/" "${TARGET_DIR}/.ddev/" || die "Failed to copy .ddev/"
+    success ".ddev/ copied to target"
+fi
+
+# ── Copy profile files ──────────────────────────────────────────────────────
+
+if [[ ${#COPY_PATHS[@]} -gt 0 ]]; then
+    info "Copying profile files..."
+    for cpath in "${COPY_PATHS[@]}"; do
+        src="${SOURCE_DIR}/${cpath}"
+        dest="${TARGET_DIR}/${cpath}"
+        if [[ -e "$src" ]]; then
+            # Ensure parent directory exists
+            mkdir -p "$(dirname "$dest")"
+            if [[ -d "$src" ]]; then
+                rsync -a "${src}/" "${dest}/" || warn "Failed to copy directory: ${cpath}"
+            else
+                cp -a "$src" "$dest" || warn "Failed to copy file: ${cpath}"
+            fi
+            success "Copied: ${cpath}"
+        else
+            warn "Profile path not found, skipping: ${cpath}"
+        fi
+    done
+fi
+
+# ── Create config.worktree.yaml ─────────────────────────────────────────────
+
+CONFIG_WORKTREE="${TARGET_DIR}/.ddev/config.worktree.yaml"
+cat > "$CONFIG_WORKTREE" <<EOF
+# Generated by ddev-worktree — do not edit manually
+# This gives the worktree its own unique DDEV project name
+# so it can run alongside the source project.
+override_config: true
+name: ${TARGET_PROJECT}
+EOF
+success "Created config.worktree.yaml (project name: ${TARGET_PROJECT})"
+
+# ── Add config.worktree.yaml to .ddev/.gitignore ────────────────────────────
+
+DDEV_GITIGNORE="${TARGET_DIR}/.ddev/.gitignore"
+if [[ -f "$DDEV_GITIGNORE" ]]; then
+    if ! grep -qxF 'config.worktree.yaml' "$DDEV_GITIGNORE"; then
+        echo 'config.worktree.yaml' >> "$DDEV_GITIGNORE"
+        success "Added config.worktree.yaml to .ddev/.gitignore"
+    fi
+else
+    echo 'config.worktree.yaml' > "$DDEV_GITIGNORE"
+    success "Created .ddev/.gitignore with config.worktree.yaml"
+fi
+
+# ── Start DDEV ───────────────────────────────────────────────────────────────
+
+if ! $NO_START; then
+    info "Starting DDEV in ${TARGET_DIR}..."
+    (cd "$TARGET_DIR" && ddev start) || die "ddev start failed in target directory"
+    success "DDEV started for ${TARGET_PROJECT}"
+
+    # ── Import database ──────────────────────────────────────────────────────
+    if [[ -n "$DB_DUMP" ]] && [[ -f "$DB_DUMP" ]]; then
+        info "Importing database into ${TARGET_PROJECT}..."
+        (cd "$TARGET_DIR" && ddev import-db --file="$DB_DUMP") || die "Database import failed"
+        success "Database imported"
+    fi
+
+    # ── Run post_create commands ─────────────────────────────────────────────
+    if [[ ${#POST_CREATE_CMDS[@]} -gt 0 ]]; then
+        info "Running post_create commands..."
+        for cmd in "${POST_CREATE_CMDS[@]}"; do
+            info "Running: ${cmd}"
+            (cd "$TARGET_DIR" && eval "$cmd") || warn "post_create command failed: ${cmd}"
+        done
+        success "post_create commands completed"
+    fi
+else
+    info "Skipping ddev start (--no-start)"
+fi
+
+# ── Cleanup ──────────────────────────────────────────────────────────────────
+
+if [[ -n "$DB_DUMP" ]] && [[ -f "$DB_DUMP" ]]; then
+    rm -f "$DB_DUMP"
+fi
+
+# ── Summary ──────────────────────────────────────────────────────────────────
+
+echo ""
+success "Worktree '${SANITIZED}' created successfully!"
+echo ""
+echo "  Source:  ${SOURCE_PROJECT} → ${SOURCE_DIR}"
+echo "  Target:  ${TARGET_PROJECT} → ${TARGET_DIR}"
+if $IS_GIT; then
+    echo "  Branch:  ${BRANCH}"
+fi
+if [[ -n "$PROFILE" ]]; then
+    echo "  Profile: ${PROFILE}"
+fi
+echo ""
+echo "  cd ${TARGET_DIR}"
+if $NO_START; then
+    echo "  ddev start"
+fi
+echo ""
