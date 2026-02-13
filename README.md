@@ -131,6 +131,8 @@ If no `.ddev/worktree.yaml` exists, the command works fine — it just skips the
 
 ### Profile Examples
 
+> **Note:** Only the ProcessWire profile has been tested. The other profiles are untested examples — adapt them to your project's needs.
+
 **ProcessWire:**
 
 ```yaml
@@ -143,6 +145,19 @@ profiles:
       - .env
     post_create:
       - composer install
+
+  minimal:
+    copy:
+      - .env
+    post_create:
+      - composer install
+
+  frontend:
+    copy:
+      - .env
+      - site/assets
+    post_create:
+      - npm install
 ```
 
 **Drupal:**
