@@ -7,13 +7,13 @@ The new directory gets its own DDEV project name via `config.worktree.yaml`, so 
 ## Installation
 
 ```bash
-ddev add-on install --global esanmiguel/ddev-worktree
+ddev add-on install esanmiguel/ddev-worktree
 ```
 
 Or install from a local clone:
 
 ```bash
-ddev add-on install --global /path/to/ddev-worktree
+ddev add-on install /path/to/ddev-worktree
 ```
 
 Once installed, the `ddev worktree` and `ddev worktree-remove` commands are available in every DDEV project.
@@ -59,7 +59,7 @@ Creates a clone of the current DDEV project in a sibling directory.
 
 | Flag | Description |
 |------|-------------|
-| `--profile=NAME` | Which profile from `.ddev/worktree.yaml` to use |
+| `--profile=NAME` | Which profile from `.ddev/worktree-hooks.yaml` to use |
 | `--no-db` | Skip database export/import |
 | `--no-start` | Create files only — don't start DDEV or run post_create |
 | `--force`, `-f` | Overwrite an existing target directory/project |
@@ -89,12 +89,12 @@ ddev worktree-remove feature-login
 
 This stops the DDEV project, removes the git worktree (or deletes the directory), and cleans up. It refuses to remove directories that don't have a `config.worktree.yaml` as a safety measure.
 
-## Configuration: `.ddev/worktree.yaml`
+## Configuration: `.ddev/worktree-hooks.yaml`
 
 Create this file in your project's `.ddev/` directory to configure what gets copied and what commands run after clone creation. Commit it to git so your team shares the same setup.
 
 ```yaml
-# .ddev/worktree.yaml
+# .ddev/worktree-hooks.yaml
 default_profile: full
 
 profiles:
@@ -127,7 +127,7 @@ profiles:
 | `profiles.<name>.copy` | Files/directories to copy from source to target (relative to project root). Use this for things not in git: uploads, `.env`, etc. |
 | `profiles.<name>.post_create` | Shell commands to run in the target directory after DDEV is started |
 
-If no `.ddev/worktree.yaml` exists, the command works fine — it just skips the copy and post_create steps.
+If no `.ddev/worktree-hooks.yaml` exists, the command works fine — it just skips the copy and post_create steps.
 
 ### Profile Examples
 
@@ -230,11 +230,11 @@ The command automatically adds `config.worktree.yaml` to `.ddev/.gitignore` to k
 ## Dependencies
 
 - **DDEV >= v1.24.0**
-- **yq** (recommended) — for full YAML parsing of `.ddev/worktree.yaml`. Install via `brew install yq` or see [yq docs](https://github.com/mikefarah/yq). Without yq, the command falls back to basic grep/awk parsing with a warning.
+- **yq** (recommended) — for full YAML parsing of `.ddev/worktree-hooks.yaml`. Install via `brew install yq` or see [yq docs](https://github.com/mikefarah/yq). Without yq, the command falls back to basic grep/awk parsing with a warning.
 - **rsync** — for file copying (pre-installed on macOS and most Linux distributions)
 
 ## Uninstall
 
 ```bash
-ddev add-on remove --global ddev-worktree
+ddev add-on remove ddev-worktree
 ```

@@ -3,7 +3,7 @@
 ## Description: Clone a DDEV project into a git worktree (or rsync copy) with its database
 ## Usage: worktree <branch-or-name> [flags]
 ## Example: ddev worktree feature-branch\nddev worktree hotfix --profile=minimal --no-db
-## Flags: [{"Name":"profile","Type":"string","Usage":"Profile from .ddev/worktree.yaml to use"},{"Name":"no-db","Type":"bool","Usage":"Skip database export/import"},{"Name":"no-start","Type":"bool","Usage":"Create files but don't start DDEV or run post_create"},{"Name":"force","Shorthand":"f","Type":"bool","Usage":"Overwrite existing target directory"}]
+## Flags: [{"Name":"profile","Type":"string","Usage":"Profile from .ddev/worktree-hooks.yaml to use"},{"Name":"no-db","Type":"bool","Usage":"Skip database export/import"},{"Name":"no-start","Type":"bool","Usage":"Create files but don't start DDEV or run post_create"},{"Name":"force","Shorthand":"f","Type":"bool","Usage":"Overwrite existing target directory"}]
 
 set -euo pipefail
 
@@ -139,9 +139,9 @@ TARGET_PROJECT="${SOURCE_PROJECT}-${SANITIZED}"
 info "Source project: ${SOURCE_PROJECT} (${SOURCE_DIR})"
 info "Target project: ${TARGET_PROJECT} (${TARGET_DIR})"
 
-# ── Read worktree.yaml config ───────────────────────────────────────────────
+# ── Read worktree-hooks.yaml config ───────────────────────────────────────────────
 
-WORKTREE_CONFIG="${SOURCE_DDEV_DIR}/worktree.yaml"
+WORKTREE_CONFIG="${SOURCE_DDEV_DIR}/worktree-hooks.yaml"
 PROFILE=""
 COPY_PATHS=()
 POST_CREATE_CMDS=()
@@ -180,7 +180,7 @@ if [[ -f "$WORKTREE_CONFIG" ]]; then
         done < <(yaml_profile_list_field "$WORKTREE_CONFIG" "$PROFILE" "post_create")
     fi
 else
-    info "No .ddev/worktree.yaml found — skipping profile-based copy/post_create"
+    info "No .ddev/worktree-hooks.yaml found — skipping profile-based copy/post_create"
 fi
 
 # ── Preflight checks ────────────────────────────────────────────────────────
