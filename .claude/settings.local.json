@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:docs.ddev.com)",
+      "Bash(ddev version:*)",
+      "Bash(ddev add-on list:*)",
+      "Bash(ddev help:*)",
+      "Bash(ddev list:*)",
+      "Bash(python3:*)",
+      "WebFetch(domain:raw.githubusercontent.com)"
+    ]
+  }
+}
