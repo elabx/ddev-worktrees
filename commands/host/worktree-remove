@@ -18,6 +18,16 @@ sanitize_name() {
     echo "$1" | sed 's|[/\\]|-|g; s|[^a-zA-Z0-9._-]|-|g; s|-\{2,\}|-|g; s|^-||; s|-$||'
 }
 
+is_omit_project_name_enabled() {
+    local global_config="$HOME/.ddev/global_config.yaml"
+    [[ -f "$global_config" ]] && grep -q '^omit_project_name_by_default: true' "$global_config"
+}
+
+is_git_worktree() {
+    local dir="$1" source_dir="$2"
+    git -C "$source_dir" worktree list 2>/dev/null | grep -q "$(cd "$dir" 2>/dev/null && pwd)"
+}
+
 # ── Arg parsing ──────────────────────────────────────────────────────────────
 
 NAME=""
@@ -54,6 +64,9 @@ PARENT_DIR=$(dirname "$SOURCE_DIR")
 # ── List mode ────────────────────────────────────────────────────────────────
 
 if $LIST_MODE; then
+    OMIT_ENABLED=false
+    is_omit_project_name_enabled && OMIT_ENABLED=true
+
     echo "Worktree clones for project '${SOURCE_PROJECT}':"
     echo ""
     found=0
@@ -62,7 +75,6 @@ if $LIST_MODE; then
         config_wt="${dir}.ddev/config.worktree.yaml"
         if [[ -f "$config_wt" ]]; then
             wt_name=$(grep -E '^name:' "$config_wt" 2>/dev/null | head -1 | sed 's/^name:[[:space:]]*//')
-            # Check if the worktree project name starts with our source project
             if [[ "$wt_name" == "${SOURCE_PROJECT}-"* ]]; then
                 suffix="${wt_name#${SOURCE_PROJECT}-}"
                 status="stopped"
@@ -72,6 +84,15 @@ if $LIST_MODE; then
                 printf "  %-30s %-12s %s\n" "$suffix" "($status)" "$dir"
                 found=$((found + 1))
             fi
+        elif $OMIT_ENABLED && is_git_worktree "$dir" "$SOURCE_DIR"; then
+            wt_name=$(basename "${dir%/}")
+            suffix="${wt_name#${SOURCE_DIRNAME}-}"
+            status="stopped"
+            if ddev describe -j "$wt_name" 2>/dev/null | grep -q '"status":"running"' 2>/dev/null; then
+                status="running"
+            fi
+            printf "  %-30s %-12s %s\n" "$suffix" "($status)" "$dir"
+            found=$((found + 1))
         fi
     done
     if [[ $found -eq 0 ]]; then
@@ -91,10 +112,14 @@ TARGET_PROJECT="${SOURCE_PROJECT}-${SANITIZED}"
 
 [[ -d "$TARGET_DIR" ]] || die "Directory not found: ${TARGET_DIR}"
 
-# Safety check: only remove dirs that have config.worktree.yaml
+# Safety check: verify this was created by 'ddev worktree'
 CONFIG_WORKTREE="${TARGET_DIR}/.ddev/config.worktree.yaml"
 if [[ ! -f "$CONFIG_WORKTREE" ]]; then
-    die "Safety check failed: ${TARGET_DIR} does not contain .ddev/config.worktree.yaml\nThis directory was not created by 'ddev worktree' — refusing to remove."
+    if is_omit_project_name_enabled && is_git_worktree "$TARGET_DIR" "$SOURCE_DIR"; then
+        info "No config.worktree.yaml (omit_project_name_by_default is enabled) — verified as git worktree"
+    else
+        die "Safety check failed: ${TARGET_DIR} does not contain .ddev/config.worktree.yaml and is not a recognized git worktree.\nThis directory was not created by 'ddev worktree' — refusing to remove."
+    fi
 fi
 
 info "Removing worktree clone: ${TARGET_PROJECT} (${TARGET_DIR})"
