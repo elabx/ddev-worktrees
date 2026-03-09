@@ -313,8 +313,16 @@ if [[ ${#COPY_PATHS[@]} -gt 0 ]]; then
 fi
 
 # ── Project name isolation ───────────────────────────────────────────────────
+# When omit_project_name_by_default is enabled AND the source config.yaml has
+# no explicit name field, DDEV derives the project name from the directory.
+# Otherwise we must create config.worktree.yaml to override the inherited name.
 
-if is_omit_project_name_enabled; then
+SOURCE_HAS_NAME=false
+if grep -qE '^name:' "${TARGET_DIR}/.ddev/config.yaml" 2>/dev/null; then
+    SOURCE_HAS_NAME=true
+fi
+
+if is_omit_project_name_enabled && ! $SOURCE_HAS_NAME; then
     TARGET_PROJECT=$(basename "$TARGET_DIR")
     success "omit_project_name_by_default is enabled — DDEV will use directory name: ${TARGET_PROJECT}"
 else

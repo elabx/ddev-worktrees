@@ -64,9 +64,6 @@ PARENT_DIR=$(dirname "$SOURCE_DIR")
 # ── List mode ────────────────────────────────────────────────────────────────
 
 if $LIST_MODE; then
-    OMIT_ENABLED=false
-    is_omit_project_name_enabled && OMIT_ENABLED=true
-
     echo "Worktree clones for project '${SOURCE_PROJECT}':"
     echo ""
     found=0
@@ -84,7 +81,7 @@ if $LIST_MODE; then
                 printf "  %-30s %-12s %s\n" "$suffix" "($status)" "$dir"
                 found=$((found + 1))
             fi
-        elif $OMIT_ENABLED && is_git_worktree "$dir" "$SOURCE_DIR"; then
+        elif is_git_worktree "$dir" "$SOURCE_DIR"; then
             wt_name=$(basename "${dir%/}")
             suffix="${wt_name#${SOURCE_DIRNAME}-}"
             status="stopped"
@@ -115,8 +112,8 @@ TARGET_PROJECT="${SOURCE_PROJECT}-${SANITIZED}"
 # Safety check: verify this was created by 'ddev worktree'
 CONFIG_WORKTREE="${TARGET_DIR}/.ddev/config.worktree.yaml"
 if [[ ! -f "$CONFIG_WORKTREE" ]]; then
-    if is_omit_project_name_enabled && is_git_worktree "$TARGET_DIR" "$SOURCE_DIR"; then
-        info "No config.worktree.yaml (omit_project_name_by_default is enabled) — verified as git worktree"
+    if is_git_worktree "$TARGET_DIR" "$SOURCE_DIR"; then
+        info "No config.worktree.yaml — verified as git worktree of this project"
     else
         die "Safety check failed: ${TARGET_DIR} does not contain .ddev/config.worktree.yaml and is not a recognized git worktree.\nThis directory was not created by 'ddev worktree' — refusing to remove."
     fi
