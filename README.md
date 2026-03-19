@@ -7,7 +7,7 @@ The new directory gets its own DDEV project name via `config.worktree.yaml`, so 
 ## Installation
 
 ```bash
-ddev add-on install esanmiguel/ddev-worktree
+ddev add-on install elabx/ddev-worktrees
 ```
 
 Or install from a local clone:
