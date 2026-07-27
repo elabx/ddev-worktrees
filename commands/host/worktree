@@ -336,15 +336,22 @@ name: ${TARGET_PROJECT}
 EOF
     success "Created config.worktree.yaml (project name: ${TARGET_PROJECT})"
 
-    DDEV_GITIGNORE="${TARGET_DIR}/.ddev/.gitignore"
-    if [[ -f "$DDEV_GITIGNORE" ]]; then
-        if ! grep -qxF 'config.worktree.yaml' "$DDEV_GITIGNORE"; then
-            echo 'config.worktree.yaml' >> "$DDEV_GITIGNORE"
-            success "Added config.worktree.yaml to .ddev/.gitignore"
+    # Ignore it via git's exclude file, never via .ddev/.gitignore — that file is
+    # generated and owned by DDEV. It carries a "#ddev-generated" first line, and
+    # DDEV silently stops maintaining any copy missing that signature. It also
+    # lists itself, so it is untracked and `git worktree add` never checks it out:
+    # writing it here would beat `ddev start` to the punch and leave DDEV's whole
+    # ignore list permanently disabled. Appending to an existing signed copy is no
+    # better — the next `ddev start` regenerates the file and drops the line.
+    GIT_EXCLUDE=$(git -C "$TARGET_DIR" rev-parse --path-format=absolute --git-path info/exclude 2>/dev/null)
+    if [[ -n "$GIT_EXCLUDE" ]]; then
+        mkdir -p "$(dirname "$GIT_EXCLUDE")"
+        if ! grep -qxF '.ddev/config.worktree.yaml' "$GIT_EXCLUDE" 2>/dev/null; then
+            echo '.ddev/config.worktree.yaml' >> "$GIT_EXCLUDE"
+            success "Ignored .ddev/config.worktree.yaml via ${GIT_EXCLUDE}"
         fi
     else
-        echo 'config.worktree.yaml' > "$DDEV_GITIGNORE"
-        success "Created .ddev/.gitignore with config.worktree.yaml"
+        warn "Could not resolve git exclude file — .ddev/config.worktree.yaml will show as untracked"
     fi
 fi
 

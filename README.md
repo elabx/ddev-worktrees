@@ -223,9 +223,13 @@ When the source project is a git repo:
 
 If there's no git repo, the command uses `rsync` to copy all files, excluding DDEV runtime artifacts.
 
-### .ddev/.gitignore
+### Keeping git clean
 
-The command automatically adds `config.worktree.yaml` to `.ddev/.gitignore` to keep git clean.
+The command adds `.ddev/config.worktree.yaml` to the repo's git exclude file (`.git/info/exclude`), so the generated config never shows up as untracked.
+
+It deliberately does **not** write to `.ddev/.gitignore`. That file is generated and owned by DDEV: it carries a `#ddev-generated` first line, and DDEV silently stops maintaining any copy that lacks that signature. It also lists itself, which makes it untracked — so `git worktree add` never checks it out, and a worktree starts with no copy at all. Writing one there before `ddev start` would permanently disable DDEV's ignore list, leaving every generated `.ddev` artifact (`.homeadditions/`, `.webimageBuild/`, `traefik/`, `db_snapshots/`, …) showing as untracked in the worktree.
+
+Because `info/exclude` lives in the repo's common git directory, one entry covers the source checkout and every worktree, and it survives `ddev start` regenerating `.ddev/.gitignore`.
 
 ## Dependencies
 
