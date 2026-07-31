@@ -2,7 +2,7 @@
 
 A global DDEV add-on that clones an existing DDEV project (files + database) into a new directory. If the project is a git repo, it uses `git worktree` to create a linked worktree; otherwise it copies files with rsync.
 
-The new directory gets its own DDEV project name via `config.worktree.yaml`, so both instances can run simultaneously without collision.
+The new directory gets its own DDEV project name via `config.worktree.local.yaml`, so both instances can run simultaneously without collision.
 
 ## Installation
 
@@ -51,7 +51,7 @@ Creates a clone of the current DDEV project in a sibling directory.
 2. Creates the target directory via `git worktree add` (or `rsync` if not a git repo)
 3. Copies `.ddev/` if it's gitignored
 4. Copies any files specified in the profile's `copy` list
-5. Creates `.ddev/config.worktree.yaml` with a unique project name
+5. Creates `.ddev/config.worktree.local.yaml` with a unique project name
 6. Starts DDEV and imports the database
 7. Runs any `post_create` commands from the profile
 
@@ -87,7 +87,7 @@ ddev worktree-remove --list
 ddev worktree-remove feature-login
 ```
 
-This stops the DDEV project, removes the git worktree (or deletes the directory), and cleans up. It refuses to remove directories that don't have a `config.worktree.yaml` as a safety measure.
+This stops the DDEV project, removes the git worktree (or deletes the directory), and cleans up. It refuses to remove directories that don't have a `config.worktree.local.yaml` as a safety measure (the older `config.worktree.yaml` is still accepted, so worktrees created before v1.1.0 remain removable).
 
 ## Configuration: `.ddev/worktree-hooks.yaml`
 
@@ -209,7 +209,7 @@ profiles:
 
 ### Project Isolation
 
-The clone gets a `config.worktree.yaml` with `override_config: true` and a unique `name` field. This overrides the project name from `config.yaml` without modifying any git-tracked files. Both projects can run simultaneously with their own containers, databases, and URLs.
+The clone gets a `config.worktree.local.yaml` with `override_config: true` and a unique `name` field. This overrides the project name from `config.yaml` without modifying any git-tracked files. Both projects can run simultaneously with their own containers, databases, and URLs.
 
 ### Git Worktree Behavior
 
@@ -225,11 +225,9 @@ If there's no git repo, the command uses `rsync` to copy all files, excluding DD
 
 ### Keeping git clean
 
-The command adds `.ddev/config.worktree.yaml` to the repo's git exclude file (`.git/info/exclude`), so the generated config never shows up as untracked.
+The generated config is named `config.worktree.local.yaml`, and the `.local.` is deliberate: DDEV's own generated `.ddev/.gitignore` already ignores `/config.*.local.y*ml`. The file stays out of `git status` without this add-on writing to `.gitignore`, `.git/info/exclude`, or any other git-owned file.
 
-It deliberately does **not** write to `.ddev/.gitignore`. That file is generated and owned by DDEV: it carries a `#ddev-generated` first line, and DDEV silently stops maintaining any copy that lacks that signature. It also lists itself, which makes it untracked — so `git worktree add` never checks it out, and a worktree starts with no copy at all. Writing one there before `ddev start` would permanently disable DDEV's ignore list, leaving every generated `.ddev` artifact (`.homeadditions/`, `.webimageBuild/`, `traefik/`, `db_snapshots/`, …) showing as untracked in the worktree.
-
-Because `info/exclude` lives in the repo's common git directory, one entry covers the source checkout and every worktree, and it survives `ddev start` regenerating `.ddev/.gitignore`.
+One wrinkle: `.ddev/.gitignore` is itself untracked, so a fresh worktree starts without it and the config is briefly visible to `git status`. The first `ddev start` regenerates the ignore file and it disappears. With `--no-start`, it stays visible until you start the project.
 
 ## Dependencies
 
