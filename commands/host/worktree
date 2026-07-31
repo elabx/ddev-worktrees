@@ -218,8 +218,14 @@ fi
 # ── Export database ──────────────────────────────────────────────────────────
 
 DB_DUMP=""
+DB_DUMP_DIR=""
+cleanup_db_dump() { [[ -n "$DB_DUMP_DIR" ]] && rm -rf "$DB_DUMP_DIR"; return 0; }
+trap cleanup_db_dump EXIT INT TERM
+
 if ! $NO_DB; then
-    DB_DUMP=$(mktemp "/tmp/ddev-worktree-db-XXXXXX.sql.gz")
+    # Template Xs must be trailing — BSD mktemp treats them literally otherwise.
+    DB_DUMP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/ddev-worktree-XXXXXX") || die "Could not create temp directory"
+    DB_DUMP="${DB_DUMP_DIR}/db.sql.gz"
 
     # Make sure source project is running for DB export
     SOURCE_STATUS=$(ddev describe -j 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('raw',{}).get('status',''))" 2>/dev/null || echo "")
@@ -364,12 +370,6 @@ if ! $NO_START; then
     fi
 else
     info "Skipping ddev start (--no-start)"
-fi
-
-# ── Cleanup ──────────────────────────────────────────────────────────────────
-
-if [[ -n "$DB_DUMP" ]] && [[ -f "$DB_DUMP" ]]; then
-    rm -f "$DB_DUMP"
 fi
 
 # ── Summary ──────────────────────────────────────────────────────────────────

@@ -229,6 +229,24 @@ The generated config is named `config.worktree.local.yaml`, and the `.local.` is
 
 One wrinkle: `.ddev/.gitignore` is itself untracked, so a fresh worktree starts without it and the config is briefly visible to `git status`. The first `ddev start` regenerates the ignore file and it disappears. With `--no-start`, it stays visible until you start the project.
 
+### Database transfer
+
+With a database export (the default), the dump is written to a private temp directory created with `mktemp -d` under `$TMPDIR` (falling back to `/tmp`), and removed by an `EXIT`/`INT`/`TERM` trap — so an interrupted or failed run leaves nothing behind, and concurrent runs never collide.
+
+## Troubleshooting
+
+### `mktemp: mkstemp failed on /tmp/ddev-worktree-db-XXXXXX.sql.gz: File exists`
+
+Affects **v1.1.0 and earlier on macOS**. Those versions built the dump path with the `X` placeholders mid-string (`ddev-worktree-db-XXXXXX.sql.gz`). BSD `mktemp` only substitutes a *trailing* run of `X`s, so the name was used literally — the same fixed path on every run. There was also no cleanup trap, so any failure between export and import left the file behind, and every later run then failed on it.
+
+Unblock an affected machine:
+
+```bash
+rm -f /tmp/ddev-worktree-db-*.sql.gz
+```
+
+Then upgrade to v1.1.1 or later, which uses a temp directory plus a cleanup trap. Note that reinstalling or updating the add-on overwrites `~/.ddev/commands/host/worktree`, so patch the repo rather than the installed copy.
+
 ## Dependencies
 
 - **DDEV >= v1.24.0**
