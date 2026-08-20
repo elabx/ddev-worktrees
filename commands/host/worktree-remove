@@ -16,7 +16,7 @@ success() { printf "\033[32m✓\033[0m %s\n" "$1"; }
 warn() { printf "\033[33m!\033[0m %s\n" "$1"; }
 
 sanitize_name() {
-    echo "$1" | sed 's|[/\\]|-|g; s|[^a-zA-Z0-9._-]|-|g; s|-\{2,\}|-|g; s|^-||; s|-$||'
+    echo "$1" | sed 's|[/\\_]|-|g; s|[^a-zA-Z0-9.-]|-|g; s|-\{2,\}|-|g; s|^-||; s|-$||'
 }
 
 is_omit_project_name_enabled() {
