@@ -10,13 +10,20 @@ set -euo pipefail
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
-die() { printf "\033[31mError:\033[0m %s\n" "$1" >&2; exit 1; }
+die() { printf "\033[31mError:\033[0m %b\n" "$1" >&2; exit 1; }
 info() { printf "\033[34m→\033[0m %s\n" "$1"; }
 success() { printf "\033[32m✓\033[0m %s\n" "$1"; }
 warn() { printf "\033[33m!\033[0m %s\n" "$1"; }
 
+# Must match sanitize_name in the worktree command.
 sanitize_name() {
-    echo "$1" | sed 's|[/\\_]|-|g; s|[^a-zA-Z0-9.-]|-|g; s|-\{2,\}|-|g; s|^-||; s|-$||'
+    printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | sed 's|[^a-z0-9-]|-|g; s|-\{2,\}|-|g; s|^-||; s|-$||'
+}
+
+# Sanitizer used up to v1.1.2 (kept "_", "." and uppercase). Clones created
+# by those versions live under these names, so removal still tries it.
+legacy_sanitize_name() {
+    printf '%s' "$1" | sed 's|[/\\]|-|g; s|[^a-zA-Z0-9._-]|-|g; s|-\{2,\}|-|g; s|^-||; s|-$||'
 }
 
 is_omit_project_name_enabled() {
@@ -118,11 +125,20 @@ fi
 
 [[ -n "$NAME" ]] || die "Usage: ddev worktree-remove <name> [--list]"
 
-SANITIZED=$(sanitize_name "$NAME")
+SANITIZED=""
+TRIED=()
+for candidate in "$(sanitize_name "$NAME")" "$(legacy_sanitize_name "$NAME")"; do
+    [[ -n "$candidate" ]] || continue
+    TRIED+=("${PARENT_DIR}/${SOURCE_DIRNAME}-${candidate}")
+    if [[ -d "${PARENT_DIR}/${SOURCE_DIRNAME}-${candidate}" ]]; then
+        SANITIZED="$candidate"
+        break
+    fi
+done
+[[ -n "$SANITIZED" ]] || die "Directory not found: ${TRIED[0]:-${PARENT_DIR}/${SOURCE_DIRNAME}-}\nRun 'ddev worktree-remove --list' to see existing clones."
+
 TARGET_DIR="${PARENT_DIR}/${SOURCE_DIRNAME}-${SANITIZED}"
 TARGET_PROJECT="${SOURCE_PROJECT}-${SANITIZED}"
-
-[[ -d "$TARGET_DIR" ]] || die "Directory not found: ${TARGET_DIR}"
 
 # Safety check: verify this was created by 'ddev worktree'
 if ! CONFIG_WORKTREE=$(worktree_config "$TARGET_DIR"); then
