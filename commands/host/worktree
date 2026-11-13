@@ -10,13 +10,40 @@ set -euo pipefail
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
-die() { printf "\033[31mError:\033[0m %s\n" "$1" >&2; exit 1; }
+die() { printf "\033[31mError:\033[0m %b\n" "$1" >&2; exit 1; }
 info() { printf "\033[34m→\033[0m %s\n" "$1"; }
 success() { printf "\033[32m✓\033[0m %s\n" "$1"; }
 warn() { printf "\033[33m!\033[0m %s\n" "$1"; }
 
+# Lowercase, and map anything outside [a-z0-9-] to "-", so the result is a
+# valid DNS label for the project hostname. Keep in sync with worktree-remove.
 sanitize_name() {
-    echo "$1" | sed 's|[/\\]|-|g; s|[^a-zA-Z0-9._-]|-|g; s|-\{2,\}|-|g; s|^-||; s|-$||'
+    printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | sed 's|[^a-z0-9-]|-|g; s|-\{2,\}|-|g; s|^-||; s|-$||'
+}
+
+# Exact-name match against registered DDEV projects.
+ddev_project_exists() {
+    ddev list -j 2>/dev/null | python3 -c '
+import json, sys
+name = sys.argv[1]
+projects = json.load(sys.stdin).get("raw") or []
+sys.exit(0 if any(p.get("name") == name for p in projects) else 1)
+' "$1"
+}
+
+# Echoes the path where branch $1 is checked out, or nothing.
+branch_checkout_path() {
+    git worktree list --porcelain 2>/dev/null | awk -v ref="refs/heads/$1" '
+        /^worktree / { path = substr($0, 10) }
+        $0 == "branch " ref { print path; exit }
+    '
+}
+
+# Physical path of $1, even if its last component does not exist yet.
+physical_path() {
+    local parent
+    parent=$(cd "$(dirname "$1")" 2>/dev/null && pwd -P) || { echo "$1"; return; }
+    echo "${parent}/$(basename "$1")"
 }
 
 is_omit_project_name_enabled() {
@@ -191,6 +218,30 @@ fi
 
 # ── Preflight checks ────────────────────────────────────────────────────────
 
+IS_GIT=false
+if [[ -d "${SOURCE_DIR}/.git" ]] || git rev-parse --git-dir &>/dev/null 2>&1; then
+    IS_GIT=true
+fi
+
+if $IS_GIT; then
+    # Catch a branch already checked out elsewhere (e.g. a clone made by an
+    # older version under a differently sanitized name) before exporting the DB.
+    EXISTING_CHECKOUT=$(branch_checkout_path "$BRANCH")
+    if [[ -n "$EXISTING_CHECKOUT" ]] && [[ "$(physical_path "$EXISTING_CHECKOUT")" != "$(physical_path "$TARGET_DIR")" ]]; then
+        die "Branch '${BRANCH}' is already checked out at ${EXISTING_CHECKOUT}\nRemove that worktree first (ddev worktree-remove --list) or use a different branch."
+    fi
+
+    # Different branch names can sanitize to the same directory
+    # (feat_login / feat-login / Feat-Login). Never let --force delete
+    # another branch's worktree.
+    if [[ -d "$TARGET_DIR" ]] && git worktree list 2>/dev/null | grep -q "$(cd "$TARGET_DIR" 2>/dev/null && pwd -P)"; then
+        TARGET_BRANCH=$(git -C "$TARGET_DIR" symbolic-ref --short -q HEAD 2>/dev/null || true)
+        if [[ "$TARGET_BRANCH" != "$BRANCH" ]]; then
+            die "${TARGET_DIR} is a worktree for branch '${TARGET_BRANCH:-(detached HEAD)}', not '${BRANCH}'.\nBoth names sanitize to '${SANITIZED}'. Remove it first with 'ddev worktree-remove' if you no longer need it."
+        fi
+    fi
+fi
+
 if [[ -d "$TARGET_DIR" ]]; then
     if $FORCE; then
         warn "Target directory exists — removing (--force)"
@@ -207,7 +258,7 @@ if [[ -d "$TARGET_DIR" ]]; then
 fi
 
 # Check for project name collision
-if ddev list 2>/dev/null | grep -qw "$TARGET_PROJECT"; then
+if ddev_project_exists "$TARGET_PROJECT"; then
     if $FORCE; then
         warn "Project '${TARGET_PROJECT}' already registered — will overwrite"
         ddev stop --unlist "$TARGET_PROJECT" 2>/dev/null || true
@@ -241,11 +292,6 @@ if ! $NO_DB; then
 fi
 
 # ── Create target directory ──────────────────────────────────────────────────
-
-IS_GIT=false
-if [[ -d "${SOURCE_DIR}/.git" ]] || git rev-parse --git-dir &>/dev/null 2>&1; then
-    IS_GIT=true
-fi
 
 if $IS_GIT; then
     info "Creating git worktree for '${BRANCH}'..."
