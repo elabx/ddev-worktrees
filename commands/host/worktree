@@ -139,7 +139,7 @@ SANITIZED=$(sanitize_name "$BRANCH")
 [[ -n "$SANITIZED" ]] || die "Branch name '$BRANCH' sanitizes to empty string"
 
 SOURCE_DIRNAME=$(basename "$SOURCE_DIR")
-TARGET_DIR="$(dirname "$SOURCE_DIR")/${SOURCE_DIRNAME}-${SANITIZED}"
+TARGET_DIR="${WORKTREE_PATH:-$(dirname "$SOURCE_DIR")/${SOURCE_DIRNAME}-${SANITIZED}}"
 TARGET_PROJECT="${SOURCE_PROJECT}-${SANITIZED}"
 
 info "Source project: ${SOURCE_PROJECT} (${SOURCE_DIR})"
@@ -191,7 +191,7 @@ fi
 
 # ── Preflight checks ────────────────────────────────────────────────────────
 
-if [[ -d "$TARGET_DIR" ]]; then
+if [[ -z "${WORKTREE_PATH:-}" && -d "$TARGET_DIR" ]]; then
     if $FORCE; then
         warn "Target directory exists — removing (--force)"
         # If it's a git worktree, remove it properly
@@ -247,7 +247,9 @@ if [[ -d "${SOURCE_DIR}/.git" ]] || git rev-parse --git-dir &>/dev/null 2>&1; th
     IS_GIT=true
 fi
 
-if $IS_GIT; then
+if [[ -n "${WORKTREE_PATH:-}" ]]; then
+    info "Using existing worktree at ${TARGET_DIR}"
+elif $IS_GIT; then
     info "Creating git worktree for '${BRANCH}'..."
 
     # Determine if the branch exists locally, remotely, or needs creation
