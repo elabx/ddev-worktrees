@@ -119,7 +119,7 @@ fi
 [[ -n "$NAME" ]] || die "Usage: ddev worktree-remove <name> [--list]"
 
 SANITIZED=$(sanitize_name "$NAME")
-TARGET_DIR="${PARENT_DIR}/${SOURCE_DIRNAME}-${SANITIZED}"
+TARGET_DIR="${WORKTREE_PATH:-${PARENT_DIR}/${SOURCE_DIRNAME}-${SANITIZED}}"
 TARGET_PROJECT="${SOURCE_PROJECT}-${SANITIZED}"
 
 [[ -d "$TARGET_DIR" ]] || die "Directory not found: ${TARGET_DIR}"
