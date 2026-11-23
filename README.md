@@ -282,6 +282,19 @@ rm -f /tmp/ddev-worktree-db-*.sql.gz
 
 Then upgrade to v1.1.1 or later, which uses a temp directory plus a cleanup trap. Note that reinstalling or updating the add-on overwrites `~/.ddev/commands/host/worktree`, so patch the repo rather than the installed copy.
 
+## Development
+
+The tests use [bats](https://github.com/bats-core/bats-core) and a fake `ddev`,
+so they run in seconds without Docker:
+
+```bash
+brew install bats-core shellcheck   # or: apt-get install bats shellcheck
+bats tests/
+shellcheck commands/host/worktree commands/host/worktree-remove
+```
+
+GitHub Actions runs both on every pull request, on Linux and macOS.
+
 ## Dependencies
 
 - **DDEV >= v1.24.0**

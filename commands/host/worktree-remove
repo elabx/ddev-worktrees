@@ -95,7 +95,7 @@ if $LIST_MODE; then
         if config_wt=$(worktree_config "$dir"); then
             wt_name=$(grep -E '^name:' "$config_wt" 2>/dev/null | head -1 | sed 's/^name:[[:space:]]*//')
             if [[ "$wt_name" == "${SOURCE_PROJECT}-"* ]]; then
-                suffix="${wt_name#${SOURCE_PROJECT}-}"
+                suffix="${wt_name#"${SOURCE_PROJECT}"-}"
                 status="stopped"
                 if ddev describe -j "$wt_name" 2>/dev/null | grep -q '"status":"running"' 2>/dev/null; then
                     status="running"
@@ -105,7 +105,7 @@ if $LIST_MODE; then
             fi
         elif is_git_worktree "$dir" "$SOURCE_DIR"; then
             wt_name=$(basename "${dir%/}")
-            suffix="${wt_name#${SOURCE_DIRNAME}-}"
+            suffix="${wt_name#"${SOURCE_DIRNAME}"-}"
             status="stopped"
             if ddev describe -j "$wt_name" 2>/dev/null | grep -q '"status":"running"' 2>/dev/null; then
                 status="running"
@@ -141,7 +141,7 @@ TARGET_DIR="${PARENT_DIR}/${SOURCE_DIRNAME}-${SANITIZED}"
 TARGET_PROJECT="${SOURCE_PROJECT}-${SANITIZED}"
 
 # Safety check: verify this was created by 'ddev worktree'
-if ! CONFIG_WORKTREE=$(worktree_config "$TARGET_DIR"); then
+if ! worktree_config "$TARGET_DIR" >/dev/null; then
     if is_git_worktree "$TARGET_DIR" "$SOURCE_DIR"; then
         info "No config.worktree.local.yaml — verified as git worktree of this project"
     else

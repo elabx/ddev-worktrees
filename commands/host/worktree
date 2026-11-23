@@ -197,7 +197,7 @@ if [[ -f "$WORKTREE_CONFIG" ]]; then
     if [[ -n "$AVAILABLE_PROFILES" ]]; then
         if ! echo "$AVAILABLE_PROFILES" | grep -qx "$PROFILE"; then
             echo "Available profiles:" >&2
-            echo "$AVAILABLE_PROFILES" | sed 's/^/  - /' >&2
+            while IFS= read -r p; do echo "  - $p"; done <<<"$AVAILABLE_PROFILES" >&2
             die "Profile '${PROFILE}' not found in ${WORKTREE_CONFIG}"
         fi
         info "Using profile: ${PROFILE}"
