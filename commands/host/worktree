@@ -4,7 +4,7 @@
 ## Description: Clone a DDEV project into a git worktree (or rsync copy) with its database
 ## Usage: worktree <branch-or-name> [flags]
 ## Example: ddev worktree feature-branch\nddev worktree hotfix --profile=minimal --no-db\nddev worktree --path=../my-site-from-ide
-## Flags: [{"Name":"profile","Type":"string","Usage":"Profile from .ddev/worktree-hooks.yaml to use"},{"Name":"no-db","Type":"bool","Usage":"Skip database export/import"},{"Name":"no-start","Type":"bool","Usage":"Create files but don't start DDEV or run post_create"},{"Name":"force","Shorthand":"f","Type":"bool","Usage":"Overwrite existing target directory"},{"Name":"path","Type":"string","Usage":"Set up DDEV in an existing git worktree created by another tool (IDE, agent). Files are never created or deleted"}]
+## Flags: [{"Name":"profile","Type":"string","Usage":"Profile from .ddev/worktree-hooks.yaml to use"},{"Name":"no-db","Type":"bool","Usage":"Skip database export/import"},{"Name":"no-start","Type":"bool","Usage":"Create files but don't start DDEV or run post_create"},{"Name":"force","Shorthand":"f","Type":"bool","Usage":"Overwrite existing target directory"},{"Name":"path","Type":"string","Usage":"Set up DDEV in an existing git worktree created by another tool (IDE, agent). The worktree itself is never created or deleted"}]
 
 set -euo pipefail
 
@@ -57,6 +57,12 @@ is_linked_worktree_of_source() {
         [[ "$(cd "$wt" 2>/dev/null && pwd -P)" == "$want" ]] && return 0
     done < <(git -C "$SOURCE_DIR" worktree list --porcelain 2>/dev/null | sed -n 's/^worktree //p')
     return 1
+}
+
+# Succeeds if the worktree config in directory $1 marks it as adopted with
+# --path, i.e. its files belong to the tool that created it.
+is_managed_externally() {
+    grep -q '^# managed-by: external' "${1%/}/.ddev/config.worktree.local.yaml" 2>/dev/null
 }
 
 is_omit_project_name_enabled() {
@@ -144,6 +150,7 @@ NO_DB=false
 NO_START=false
 FORCE=false
 ADOPT_PATH=""
+PATH_GIVEN=false
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -152,8 +159,9 @@ while [[ $# -gt 0 ]]; do
         --no-db)     NO_DB=true; shift ;;
         --no-start)  NO_START=true; shift ;;
         --force|-f)  FORCE=true; shift ;;
-        --path=*)    ADOPT_PATH="${1#--path=}"; shift ;;
-        --path)      ADOPT_PATH="${2:-}"; shift 2 ;;
+        --path=*)    PATH_GIVEN=true; ADOPT_PATH="${1#--path=}"; shift ;;
+        --path)      [[ $# -ge 2 ]] || die "--path needs a directory"
+                     PATH_GIVEN=true; ADOPT_PATH="$2"; shift 2 ;;
         -*)          die "Unknown flag: $1" ;;
         *)
             if [[ -z "$BRANCH" ]]; then
@@ -168,12 +176,17 @@ done
 
 # --path adopts a worktree someone else created; the name defaults to its folder.
 ADOPT=false
-if [[ -n "$ADOPT_PATH" ]]; then
+if $PATH_GIVEN; then
+    [[ -n "$ADOPT_PATH" ]] || die "--path needs a directory (got an empty value)"
     ADOPT=true
     $FORCE && die "--force cannot be combined with --path: the directory belongs to the tool that created it."
     [[ -d "$ADOPT_PATH" ]] || die "--path directory not found: ${ADOPT_PATH}"
     ADOPT_PATH=$(cd "$ADOPT_PATH" && pwd -P)
-    [[ -n "$BRANCH" ]] || BRANCH=$(basename "$ADOPT_PATH")
+    if [[ -z "$BRANCH" ]]; then
+        BRANCH=$(basename "$ADOPT_PATH")
+        # ../site-feature-x next to ../site → name "feature-x", not "site-feature-x"
+        BRANCH="${BRANCH#"$(basename "$(pwd)")-"}"
+    fi
 fi
 
 [[ -n "$BRANCH" ]] || die "Usage: ddev worktree <branch-or-name> [--profile=NAME] [--no-db] [--no-start] [--force] [--path=DIR]"
@@ -258,9 +271,14 @@ if $ADOPT; then
     # directory really is a worktree of this repo.
     $IS_GIT || die "--path requires the source project to be a git repository"
     is_linked_worktree_of_source "$TARGET_DIR" || die "${TARGET_DIR} is not a git worktree of ${SOURCE_DIR}\nCreate it with 'git worktree add' (or your IDE) first."
-    if [[ -f "${TARGET_DIR}/.ddev/config.worktree.local.yaml" ]]; then
-        die "${TARGET_DIR} is already set up by ddev-worktree.\nRemove it first with 'ddev worktree-remove --path=${TARGET_DIR}'."
+    if is_managed_externally "$TARGET_DIR"; then
+        die "${TARGET_DIR} is already set up by ddev-worktree.\nRemove it first with: ddev worktree-remove --path=\"${TARGET_DIR}\""
     fi
+    for old_cfg in config.worktree.local.yaml config.worktree.yaml; do
+        if [[ -f "${TARGET_DIR}/.ddev/${old_cfg}" ]]; then
+            die "${TARGET_DIR} is a clone created by 'ddev worktree' itself, not by another tool.\nUse it as it is, or remove it with 'ddev worktree-remove' (see --list)."
+        fi
+    done
 elif $IS_GIT; then
     # Catch a branch already checked out elsewhere (e.g. a clone made by an
     # older version under a differently sanitized name) before exporting the DB.
@@ -281,6 +299,9 @@ elif $IS_GIT; then
 fi
 
 if ! $ADOPT && [[ -d "$TARGET_DIR" ]]; then
+    if is_managed_externally "$TARGET_DIR"; then
+        die "${TARGET_DIR} is managed by another tool (set up with --path) and will not be replaced, even with --force.\nRemove its DDEV setup with: ddev worktree-remove --path=\"${TARGET_DIR}\""
+    fi
     if $FORCE; then
         warn "Target directory exists — removing (--force)"
         # If it's a git worktree, remove it properly
@@ -300,6 +321,8 @@ if ddev_project_exists "$TARGET_PROJECT"; then
     if $FORCE; then
         warn "Project '${TARGET_PROJECT}' already registered — will overwrite"
         ddev stop --unlist "$TARGET_PROJECT" 2>/dev/null || true
+    elif $ADOPT; then
+        die "A DDEV project named '${TARGET_PROJECT}' already exists.\nPass a different name (ddev worktree <name> --path=...) or delete it first: ddev delete --omit-snapshot ${TARGET_PROJECT}"
     else
         die "A DDEV project named '${TARGET_PROJECT}' already exists.\nUse --force to overwrite."
     fi
@@ -367,7 +390,9 @@ fi
 
 # ── Ensure .ddev/ exists in target (may be gitignored) ──────────────────────
 
+DDEV_DIR_COPIED=false
 if [[ ! -d "${TARGET_DIR}/.ddev" ]]; then
+    DDEV_DIR_COPIED=true
     info "Copying .ddev/ from source (appears to be gitignored)..."
     rsync -a \
         --exclude='.ddev-docker-*' \
@@ -430,6 +455,9 @@ else
         echo "# so it can run alongside the source project."
         if $ADOPT; then
             echo "# managed-by: external (worktree-remove leaves these files in place)"
+            if $DDEV_DIR_COPIED; then
+                echo "# ddev-dir: copied (worktree-remove deletes this .ddev/)"
+            fi
         fi
         echo "override_config: true"
         echo "name: ${TARGET_PROJECT}"

@@ -70,6 +70,31 @@ linked_worktrees() {
     done < <(git -C "$SOURCE_DIR" worktree list --porcelain 2>/dev/null | sed -n 's/^worktree //p')
 }
 
+# Succeeds if $1 is one of the source repo's linked worktrees.
+is_linked_worktree() {
+    local want wt
+    want=$(cd "$1" 2>/dev/null && pwd -P) || return 1
+    while IFS= read -r wt; do
+        [[ "$(cd "$wt" 2>/dev/null && pwd -P)" == "$want" ]] && return 0
+    done < <(linked_worktrees)
+    return 1
+}
+
+# Exit status: 0 if DDEV project $1 is registered, 1 if it is not,
+# 2 if that can't be determined (e.g. ddev itself fails).
+project_registered() {
+    local json
+    json=$(ddev list -j 2>/dev/null) || return 2
+    printf '%s' "$json" | python3 -c '
+import json, sys
+try:
+    projects = json.load(sys.stdin).get("raw") or []
+except Exception:
+    sys.exit(2)
+sys.exit(0 if any(p.get("name") == sys.argv[1] for p in projects) else 1)
+' "$1"
+}
+
 # Echoes the adopted worktree whose project is named $1, or nothing.
 find_adopted_worktree() {
     local wt cfg
@@ -88,12 +113,14 @@ find_adopted_worktree() {
 NAME=""
 LIST_MODE=false
 ADOPT_PATH=""
+PATH_GIVEN=false
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --list)  LIST_MODE=true; shift ;;
-        --path=*) ADOPT_PATH="${1#--path=}"; shift ;;
-        --path)  ADOPT_PATH="${2:-}"; shift 2 ;;
+        --path=*) PATH_GIVEN=true; ADOPT_PATH="${1#--path=}"; shift ;;
+        --path)  [[ $# -ge 2 ]] || die "--path needs a directory"
+                 PATH_GIVEN=true; ADOPT_PATH="$2"; shift 2 ;;
         -*)      die "Unknown flag: $1" ;;
         *)
             if [[ -z "$NAME" ]]; then
@@ -173,6 +200,10 @@ fi
 
 # ── Remove mode ──────────────────────────────────────────────────────────────
 
+if $PATH_GIVEN; then
+    [[ -n "$ADOPT_PATH" ]] || die "--path needs a directory (got an empty value)"
+    [[ -z "$NAME" ]] || die "Pass either a name or --path, not both"
+fi
 [[ -n "$NAME" || -n "$ADOPT_PATH" ]] || die "Usage: ddev worktree-remove <name> [--list] [--path=DIR]"
 
 SANITIZED=""
@@ -182,20 +213,32 @@ if [[ -n "$ADOPT_PATH" ]]; then
     TARGET_DIR=$(cd "$ADOPT_PATH" && pwd -P)
     CFG=$(worktree_config "$TARGET_DIR") || die "${TARGET_DIR} has no .ddev/config.worktree.local.yaml — it was not set up by 'ddev worktree'."
     TARGET_PROJECT=$(config_project_name "$CFG")
+    if ! is_linked_worktree "$TARGET_DIR" || [[ "$TARGET_PROJECT" != "${SOURCE_PROJECT}-"* ]]; then
+        die "${TARGET_DIR} (project '${TARGET_PROJECT}') is not a worktree of ${SOURCE_PROJECT}.\nRun this from the project it was created from."
+    fi
     SANITIZED="${TARGET_PROJECT#${SOURCE_PROJECT}-}"
 else
     TRIED=()
+    FALLBACK_DIR=""
+    FALLBACK_SANITIZED=""
     for candidate in "$(sanitize_name "$NAME")" "$(legacy_sanitize_name "$NAME")"; do
         [[ -n "$candidate" ]] || continue
-        TRIED+=("${PARENT_DIR}/${SOURCE_DIRNAME}-${candidate}")
-        if [[ -d "${PARENT_DIR}/${SOURCE_DIRNAME}-${candidate}" ]]; then
+        dir="${PARENT_DIR}/${SOURCE_DIRNAME}-${candidate}"
+        TRIED+=("$dir")
+        [[ -d "$dir" ]] || continue
+        if worktree_config "$dir" >/dev/null || is_git_worktree "$dir" "$SOURCE_DIR"; then
             SANITIZED="$candidate"
-            TARGET_DIR="${PARENT_DIR}/${SOURCE_DIRNAME}-${candidate}"
+            TARGET_DIR="$dir"
             break
         fi
+        [[ -n "$FALLBACK_DIR" ]] || { FALLBACK_DIR="$dir"; FALLBACK_SANITIZED="$candidate"; }
     done
     if [[ -z "$TARGET_DIR" ]] && SANITIZED=$(sanitize_name "$NAME") && [[ -n "$SANITIZED" ]]; then
         TARGET_DIR=$(find_adopted_worktree "${SOURCE_PROJECT}-${SANITIZED}" || true)
+    fi
+    if [[ -z "$TARGET_DIR" && -n "$FALLBACK_DIR" ]]; then
+        TARGET_DIR="$FALLBACK_DIR"
+        SANITIZED="$FALLBACK_SANITIZED"
     fi
     [[ -n "$TARGET_DIR" ]] || die "Directory not found: ${TRIED[0]:-${PARENT_DIR}/${SOURCE_DIRNAME}-}\nRun 'ddev worktree-remove --list' to see existing clones."
     TARGET_PROJECT="${SOURCE_PROJECT}-${SANITIZED}"
@@ -214,10 +257,25 @@ fi
 # the DDEV project and our config file.
 if [[ -n "${CONFIG_WORKTREE:-}" ]] && is_managed_externally "$CONFIG_WORKTREE"; then
     info "Removing DDEV setup from externally managed worktree: ${TARGET_PROJECT} (${TARGET_DIR})"
-    (cd "$TARGET_DIR" && ddev delete --omit-snapshot -y 2>/dev/null) || warn "Could not delete DDEV project (may already be removed)"
-    rm -f "$CONFIG_WORKTREE"
+    if ! (cd "$TARGET_DIR" && ddev delete --omit-snapshot -y 2>/dev/null); then
+        # Keep the config while the project is (or may be) registered, so this
+        # command can be re-run once the problem is fixed.
+        rc=0; project_registered "$TARGET_PROJECT" || rc=$?
+        if [[ $rc -ne 1 ]]; then
+            die "Could not delete DDEV project '${TARGET_PROJECT}' (is Docker running?).\nNothing was removed; fix the problem and run this command again."
+        fi
+        warn "DDEV project '${TARGET_PROJECT}' was already removed"
+    fi
+    if grep -q '^# ddev-dir: copied' "$CONFIG_WORKTREE" 2>/dev/null; then
+        # .ddev/ was gitignored and copied in by 'ddev worktree --path'; without
+        # the name override it would clash with the source project.
+        rm -rf "${TARGET_DIR}/.ddev"
+        info "Removed the .ddev/ copied in during setup"
+    else
+        rm -f "$CONFIG_WORKTREE"
+    fi
     echo ""
-    success "DDEV project '${TARGET_PROJECT}' removed. Files at ${TARGET_DIR} were left in place."
+    success "DDEV project '${TARGET_PROJECT}' removed. The worktree at ${TARGET_DIR} was left in place."
     echo ""
     exit 0
 fi
