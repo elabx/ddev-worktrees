@@ -67,7 +67,11 @@ Creates a clone of the current DDEV project in a sibling directory.
 **Target directory:** `../<source-dirname>-<sanitized-name>`
 **Target project name:** `<source-project>-<sanitized-name>`
 
-Branch names are sanitized for use as directory names (e.g., `feature/foo` becomes `feature-foo`).
+Branch names are sanitized so the project name is a valid hostname: they are
+lowercased and every character other than `a-z`, `0-9` and `-` becomes `-`
+(e.g., `feature/Foo_bar` becomes `feature-foo-bar`, `release/1.2` becomes
+`release-1-2`). If two branches sanitize to the same name, the command refuses
+to overwrite the other branch's worktree, even with `--force`.
 
 ### `ddev worktree-remove`
 
@@ -253,6 +257,14 @@ Older commands created `.ddev/.gitignore` containing only `config.worktree.yaml`
 That prevents DDEV from generating its normal ignore rules. If the file contains
 only that entry, replace it with `#ddev-generated` and run `ddev start`. Preserve
 any custom rules if you have edited the file yourself.
+
+### Worktrees with `_`, `.` or uppercase letters in their names
+
+Versions up to v1.1.2 kept `_`, `.` and uppercase letters, so a branch like
+`feat_x` produced `../site-feat_x`. Newer versions name it `../site-feat-x`.
+`ddev worktree-remove feat_x` still finds and removes the old directory.
+Running `ddev worktree feat_x` while the old clone exists stops with a message
+pointing to it; remove the old clone first, then recreate it.
 
 For an older `config.worktree.yaml`, rename it to `config.worktree.local.yaml`
 before starting DDEV. The current command uses this name, which DDEV ignores
