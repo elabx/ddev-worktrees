@@ -107,20 +107,20 @@ profiles:
       - site/assets
       - .env
     post_create:
-      - composer install
-      - npm install
+      - ddev composer install
+      - ddev npm install
 
   minimal:
     copy:
       - .env
     post_create:
-      - composer install
+      - ddev composer install
 
   frontend:
     copy:
       - .env
     post_create:
-      - npm install
+      - ddev npm install
 ```
 
 **Fields:**
@@ -148,20 +148,20 @@ profiles:
       - site/assets
       - .env
     post_create:
-      - composer install
+      - ddev composer install
 
   minimal:
     copy:
       - .env
     post_create:
-      - composer install
+      - ddev composer install
 
   frontend:
     copy:
       - .env
       - site/assets
     post_create:
-      - npm install
+      - ddev npm install
 ```
 
 **Drupal:**
@@ -175,7 +175,7 @@ profiles:
       - sites/default/files
       - .env
     post_create:
-      - composer install
+      - ddev composer install
       - ddev drush cr
 ```
 
@@ -190,8 +190,8 @@ profiles:
       - storage/app
       - .env
     post_create:
-      - composer install
-      - npm install
+      - ddev composer install
+      - ddev npm install
       - ddev artisan key:generate
 ```
 
@@ -206,7 +206,7 @@ profiles:
       - wp-content/uploads
       - .env
     post_create:
-      - composer install
+      - ddev composer install
 ```
 
 ## How It Works
