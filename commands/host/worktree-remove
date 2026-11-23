@@ -3,8 +3,8 @@
 
 ## Description: Remove a DDEV worktree clone created by 'ddev worktree'
 ## Usage: worktree-remove <name> [flags]
-## Example: ddev worktree-remove feature-branch\nddev worktree-remove --list
-## Flags: [{"Name":"list","Type":"bool","Usage":"List all worktree clones for this project"}]
+## Example: ddev worktree-remove feature-branch\nddev worktree-remove --list\nddev worktree-remove --path=../my-site-from-ide
+## Flags: [{"Name":"list","Type":"bool","Usage":"List all worktree clones for this project"},{"Name":"path","Type":"string","Usage":"Remove the DDEV setup from a worktree adopted with 'ddev worktree --path'"}]
 
 set -euo pipefail
 
@@ -51,14 +51,49 @@ worktree_config() {
     return 1
 }
 
+# Succeeds if the config file $1 marks a worktree adopted with --path,
+# whose files belong to the tool that created it.
+is_managed_externally() {
+    grep -q '^# managed-by: external' "$1" 2>/dev/null
+}
+
+config_project_name() {
+    grep -E '^name:' "$1" 2>/dev/null | head -1 | sed 's/^name:[[:space:]]*//'
+}
+
+# Echoes the linked worktrees of the source repo, one path per line.
+linked_worktrees() {
+    local main wt
+    main=$(cd "$SOURCE_DIR" && pwd -P)
+    while IFS= read -r wt; do
+        [[ "$(cd "$wt" 2>/dev/null && pwd -P)" == "$main" ]] || echo "$wt"
+    done < <(git -C "$SOURCE_DIR" worktree list --porcelain 2>/dev/null | sed -n 's/^worktree //p')
+}
+
+# Echoes the adopted worktree whose project is named $1, or nothing.
+find_adopted_worktree() {
+    local wt cfg
+    while IFS= read -r wt; do
+        cfg="${wt%/}/.ddev/config.worktree.local.yaml"
+        if is_managed_externally "$cfg" && [[ "$(config_project_name "$cfg")" == "$1" ]]; then
+            echo "$wt"
+            return 0
+        fi
+    done < <(linked_worktrees)
+    return 1
+}
+
 # ── Arg parsing ──────────────────────────────────────────────────────────────
 
 NAME=""
 LIST_MODE=false
+ADOPT_PATH=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --list)  LIST_MODE=true; shift ;;
+        --path=*) ADOPT_PATH="${1#--path=}"; shift ;;
+        --path)  ADOPT_PATH="${2:-}"; shift 2 ;;
         -*)      die "Unknown flag: $1" ;;
         *)
             if [[ -z "$NAME" ]]; then
@@ -93,6 +128,7 @@ if $LIST_MODE; then
     for dir in "${PARENT_DIR}/${SOURCE_DIRNAME}-"*/; do
         [[ -d "$dir" ]] || continue
         if config_wt=$(worktree_config "$dir"); then
+            is_managed_externally "$config_wt" && continue  # listed below
             wt_name=$(grep -E '^name:' "$config_wt" 2>/dev/null | head -1 | sed 's/^name:[[:space:]]*//')
             if [[ "$wt_name" == "${SOURCE_PROJECT}-"* ]]; then
                 suffix="${wt_name#${SOURCE_PROJECT}-}"
@@ -114,6 +150,20 @@ if $LIST_MODE; then
             found=$((found + 1))
         fi
     done
+    # Worktrees adopted with --path can live anywhere.
+    while IFS= read -r dir; do
+        cfg="${dir%/}/.ddev/config.worktree.local.yaml"
+        is_managed_externally "$cfg" || continue
+        wt_name=$(config_project_name "$cfg")
+        [[ "$wt_name" == "${SOURCE_PROJECT}-"* ]] || continue
+        suffix="${wt_name#${SOURCE_PROJECT}-}"
+        status="stopped"
+        if ddev describe -j "$wt_name" 2>/dev/null | grep -q '"status":"running"' 2>/dev/null; then
+            status="running"
+        fi
+        printf "  %-30s %-12s %s (external)\n" "$suffix" "($status)" "$dir"
+        found=$((found + 1))
+    done < <(linked_worktrees)
     if [[ $found -eq 0 ]]; then
         echo "  (none found)"
     fi
@@ -123,22 +173,33 @@ fi
 
 # ── Remove mode ──────────────────────────────────────────────────────────────
 
-[[ -n "$NAME" ]] || die "Usage: ddev worktree-remove <name> [--list]"
+[[ -n "$NAME" || -n "$ADOPT_PATH" ]] || die "Usage: ddev worktree-remove <name> [--list] [--path=DIR]"
 
 SANITIZED=""
-TRIED=()
-for candidate in "$(sanitize_name "$NAME")" "$(legacy_sanitize_name "$NAME")"; do
-    [[ -n "$candidate" ]] || continue
-    TRIED+=("${PARENT_DIR}/${SOURCE_DIRNAME}-${candidate}")
-    if [[ -d "${PARENT_DIR}/${SOURCE_DIRNAME}-${candidate}" ]]; then
-        SANITIZED="$candidate"
-        break
+TARGET_DIR=""
+if [[ -n "$ADOPT_PATH" ]]; then
+    [[ -d "$ADOPT_PATH" ]] || die "Directory not found: ${ADOPT_PATH}"
+    TARGET_DIR=$(cd "$ADOPT_PATH" && pwd -P)
+    CFG=$(worktree_config "$TARGET_DIR") || die "${TARGET_DIR} has no .ddev/config.worktree.local.yaml — it was not set up by 'ddev worktree'."
+    TARGET_PROJECT=$(config_project_name "$CFG")
+    SANITIZED="${TARGET_PROJECT#${SOURCE_PROJECT}-}"
+else
+    TRIED=()
+    for candidate in "$(sanitize_name "$NAME")" "$(legacy_sanitize_name "$NAME")"; do
+        [[ -n "$candidate" ]] || continue
+        TRIED+=("${PARENT_DIR}/${SOURCE_DIRNAME}-${candidate}")
+        if [[ -d "${PARENT_DIR}/${SOURCE_DIRNAME}-${candidate}" ]]; then
+            SANITIZED="$candidate"
+            TARGET_DIR="${PARENT_DIR}/${SOURCE_DIRNAME}-${candidate}"
+            break
+        fi
+    done
+    if [[ -z "$TARGET_DIR" ]] && SANITIZED=$(sanitize_name "$NAME") && [[ -n "$SANITIZED" ]]; then
+        TARGET_DIR=$(find_adopted_worktree "${SOURCE_PROJECT}-${SANITIZED}" || true)
     fi
-done
-[[ -n "$SANITIZED" ]] || die "Directory not found: ${TRIED[0]:-${PARENT_DIR}/${SOURCE_DIRNAME}-}\nRun 'ddev worktree-remove --list' to see existing clones."
-
-TARGET_DIR="${PARENT_DIR}/${SOURCE_DIRNAME}-${SANITIZED}"
-TARGET_PROJECT="${SOURCE_PROJECT}-${SANITIZED}"
+    [[ -n "$TARGET_DIR" ]] || die "Directory not found: ${TRIED[0]:-${PARENT_DIR}/${SOURCE_DIRNAME}-}\nRun 'ddev worktree-remove --list' to see existing clones."
+    TARGET_PROJECT="${SOURCE_PROJECT}-${SANITIZED}"
+fi
 
 # Safety check: verify this was created by 'ddev worktree'
 if ! CONFIG_WORKTREE=$(worktree_config "$TARGET_DIR"); then
@@ -148,6 +209,20 @@ if ! CONFIG_WORKTREE=$(worktree_config "$TARGET_DIR"); then
         die "Safety check failed: ${TARGET_DIR} does not contain .ddev/config.worktree.local.yaml and is not a recognized git worktree.\nThis directory was not created by 'ddev worktree' — refusing to remove."
     fi
 fi
+
+# Adopted worktree: the files belong to the tool that created them. Remove only
+# the DDEV project and our config file.
+if [[ -n "${CONFIG_WORKTREE:-}" ]] && is_managed_externally "$CONFIG_WORKTREE"; then
+    info "Removing DDEV setup from externally managed worktree: ${TARGET_PROJECT} (${TARGET_DIR})"
+    (cd "$TARGET_DIR" && ddev delete --omit-snapshot -y 2>/dev/null) || warn "Could not delete DDEV project (may already be removed)"
+    rm -f "$CONFIG_WORKTREE"
+    echo ""
+    success "DDEV project '${TARGET_PROJECT}' removed. Files at ${TARGET_DIR} were left in place."
+    echo ""
+    exit 0
+fi
+
+[[ -z "$ADOPT_PATH" ]] || die "${TARGET_DIR} was not adopted with 'ddev worktree --path'. Remove it by name: ddev worktree-remove ${SANITIZED}"
 
 info "Removing worktree clone: ${TARGET_PROJECT} (${TARGET_DIR})"
 
