@@ -41,6 +41,7 @@ ddev worktree-remove feature-login
 
 ```
 ddev worktree <branch-or-name> [--profile=NAME] [--no-db] [--no-start] [--force]
+ddev worktree [<name>] --path=DIR [--profile=NAME] [--no-db] [--no-start]
 ```
 
 Creates a clone of the current DDEV project in a sibling directory.
@@ -63,6 +64,7 @@ Creates a clone of the current DDEV project in a sibling directory.
 | `--no-db` | Skip database export/import |
 | `--no-start` | Create files only — don't start DDEV or run post_create |
 | `--force`, `-f` | Overwrite an existing target directory/project |
+| `--path=DIR` | Set up DDEV in an existing worktree another tool created (see below) |
 
 **Target directory:** `../<source-dirname>-<sanitized-name>`
 **Target project name:** `<source-project>-<sanitized-name>`
@@ -73,10 +75,50 @@ lowercased and every character other than `a-z`, `0-9` and `-` becomes `-`
 `release-1-2`). If two branches sanitize to the same name, the command refuses
 to overwrite the other branch's worktree, even with `--force`.
 
+#### Worktrees created by another tool (`--path`)
+
+IDEs such as PhpStorm and agent tools such as Paseo can create git worktrees
+themselves. `--path` sets up DDEV inside one of those instead of creating a new
+one:
+
+```bash
+git worktree add ../anywhere/my-feature feature/x   # or your IDE does this
+ddev worktree --path=../anywhere/my-feature          # run from the source project
+```
+
+The directory must already be a linked git worktree of the source project. The
+command skips `git worktree add` and the branch checks, then does everything
+else as usual (`.ddev/` copy, profile files, database, `post_create`). The name
+defaults to the directory's name, so the project above is
+`<source-project>-my-feature`; a directory named `<source-dirname>-<name>` gives
+`<name>`. Pass a name to choose a different one.
+
+The worktree belongs to the tool that created it:
+
+- `--force` is not allowed with `--path`, and `ddev worktree <name> --force`
+  refuses to replace an adopted worktree.
+- `ddev worktree-remove` removes only the DDEV project and
+  `config.worktree.local.yaml` (plus `.ddev/` if it was gitignored and copied in
+  during setup). It never deletes the directory or the git worktree.
+- If the DDEV project can't be deleted (for example, Docker isn't running),
+  nothing is removed, so you can run the command again later.
+
+Example Paseo configuration:
+
+```json
+{
+  "worktree": {
+    "setup": "cd \"$PASEO_SOURCE_CHECKOUT_PATH\" && ddev worktree --path=\"$PASEO_WORKTREE_PATH\"",
+    "teardown": "cd \"$PASEO_SOURCE_CHECKOUT_PATH\" && ddev worktree-remove --path=\"$PASEO_WORKTREE_PATH\""
+  }
+}
+```
+
 ### `ddev worktree-remove`
 
 ```
 ddev worktree-remove <name> [--list]
+ddev worktree-remove --path=DIR
 ```
 
 **List clones:**
@@ -92,6 +134,12 @@ ddev worktree-remove feature-login
 ```
 
 This stops the DDEV project, removes the git worktree (or deletes the directory), and cleans up. It refuses to remove directories that don't have a `config.worktree.local.yaml` as a safety measure (the older `config.worktree.yaml` is still accepted, so worktrees created before v1.1.0 remain removable).
+
+For a worktree set up with `ddev worktree --path`, removal (by name or with
+`--path=DIR`) deletes only the DDEV project and `config.worktree.local.yaml` (and a
+`.ddev/` copied in during setup), and leaves the files and the git worktree in
+place. Run it from the project the worktree was created from. `--list` shows these worktrees
+wherever they are, marked `(external)`.
 
 ## Configuration: `.ddev/worktree-hooks.yaml`
 
