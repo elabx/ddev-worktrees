@@ -1,0 +1,73 @@
+name: tests
+on:
+  pull_request:
+    paths-ignore:
+      - "**.md"
+  push:
+    branches: [ main ]
+    paths-ignore:
+      - "**.md"
+
+  # Nightly, so a DDEV release that breaks the add-on gets noticed.
+  schedule:
+    - cron: '25 08 * * *'
+
+  workflow_dispatch:
+    inputs:
+      debug_enabled:
+        type: boolean
+        description: Enable remote debugging session
+        required: false
+        default: false
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: shellcheck commands/host/worktree commands/host/worktree-remove tests/unit/*.bash
+
+  # Fast tests with a fake ddev. macOS is included because these are host
+  # commands: they run on the user's /bin/bash 3.2 with BSD sed and mktemp.
+  unit:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+      fail-fast: false
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install bats
+        run: |
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            brew install bats-core
+          else
+            sudo apt-get update -q && sudo apt-get install -yq bats
+          fi
+      - run: bats tests/unit
+
+  # End-to-end against a real DDEV (tests/test.bats), as in ddev-addon-template.
+  e2e:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm]
+        ddev_version: [stable, HEAD]
+      fail-fast: false
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: ddev/github-action-add-on-test@v2
+        with:
+          ddev_version: ${{ matrix.ddev_version }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          debug_enabled: ${{ github.event.inputs.debug_enabled }}
+          addon_repository: ${{ env.GITHUB_REPOSITORY }}
+          addon_ref: ${{ env.GITHUB_REF }}
+          # Release tests only on schedule/manual runs, like the action's default.
+          test_command: ${{ (github.event_name == 'push' || github.event_name == 'pull_request') && 'bats tests/test.bats --filter-tags !release' || 'bats tests/test.bats' }}

@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #ddev-generated
 
 ## Description: Remove a DDEV worktree clone created by 'ddev worktree'
@@ -158,7 +158,7 @@ if $LIST_MODE; then
             is_managed_externally "$config_wt" && continue  # listed below
             wt_name=$(grep -E '^name:' "$config_wt" 2>/dev/null | head -1 | sed 's/^name:[[:space:]]*//')
             if [[ "$wt_name" == "${SOURCE_PROJECT}-"* ]]; then
-                suffix="${wt_name#${SOURCE_PROJECT}-}"
+                suffix="${wt_name#"${SOURCE_PROJECT}"-}"
                 status="stopped"
                 if ddev describe -j "$wt_name" 2>/dev/null | grep -q '"status":"running"' 2>/dev/null; then
                     status="running"
@@ -168,7 +168,7 @@ if $LIST_MODE; then
             fi
         elif is_git_worktree "$dir" "$SOURCE_DIR"; then
             wt_name=$(basename "${dir%/}")
-            suffix="${wt_name#${SOURCE_DIRNAME}-}"
+            suffix="${wt_name#"${SOURCE_DIRNAME}"-}"
             status="stopped"
             if ddev describe -j "$wt_name" 2>/dev/null | grep -q '"status":"running"' 2>/dev/null; then
                 status="running"
@@ -183,7 +183,7 @@ if $LIST_MODE; then
         is_managed_externally "$cfg" || continue
         wt_name=$(config_project_name "$cfg")
         [[ "$wt_name" == "${SOURCE_PROJECT}-"* ]] || continue
-        suffix="${wt_name#${SOURCE_PROJECT}-}"
+        suffix="${wt_name#"${SOURCE_PROJECT}"-}"
         status="stopped"
         if ddev describe -j "$wt_name" 2>/dev/null | grep -q '"status":"running"' 2>/dev/null; then
             status="running"
@@ -216,7 +216,7 @@ if [[ -n "$ADOPT_PATH" ]]; then
     if ! is_linked_worktree "$TARGET_DIR" || [[ "$TARGET_PROJECT" != "${SOURCE_PROJECT}-"* ]]; then
         die "${TARGET_DIR} (project '${TARGET_PROJECT}') is not a worktree of ${SOURCE_PROJECT}.\nRun this from the project it was created from."
     fi
-    SANITIZED="${TARGET_PROJECT#${SOURCE_PROJECT}-}"
+    SANITIZED="${TARGET_PROJECT#"${SOURCE_PROJECT}"-}"
 else
     TRIED=()
     FALLBACK_DIR=""
