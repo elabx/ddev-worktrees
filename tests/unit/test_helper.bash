@@ -5,6 +5,7 @@
 # can be steered with:
 #   DDEV_REGISTERED  space-separated project names `ddev list -j` reports
 #   DDEV_DELETE_RC   exit status of `ddev delete` (default 0)
+#   DDEV_LIST_RC     if set, `ddev list` exits with this status instead
 
 REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME}")/../.." && pwd)"
 WORKTREE_CMD="${REPO_ROOT}/commands/host/worktree"
@@ -27,6 +28,7 @@ common_setup() {
 echo "$* @$(basename "$PWD")" >> "$DDEV_LOG"
 case "$1" in
     list)
+        [[ -n "${DDEV_LIST_RC:-}" ]] && exit "$DDEV_LIST_RC"
         printf '{"raw":['
         sep=""
         for name in ${DDEV_REGISTERED:-}; do
