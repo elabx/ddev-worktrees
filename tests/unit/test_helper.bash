@@ -6,7 +6,7 @@
 #   DDEV_REGISTERED  space-separated project names `ddev list -j` reports
 #   DDEV_DELETE_RC   exit status of `ddev delete` (default 0)
 
-REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME}")/.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME}")/../.." && pwd)"
 WORKTREE_CMD="${REPO_ROOT}/commands/host/worktree"
 REMOVE_CMD="${REPO_ROOT}/commands/host/worktree-remove"
 

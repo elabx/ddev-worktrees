@@ -1,3 +1,8 @@
+[![add-on registry](https://img.shields.io/badge/DDEV-Add--on_Registry-blue)](https://addons.ddev.com)
+[![tests](https://github.com/elabx/ddev-worktrees/actions/workflows/tests.yml/badge.svg?branch=main)](https://github.com/elabx/ddev-worktrees/actions/workflows/tests.yml?query=branch%3Amain)
+[![last commit](https://img.shields.io/github/last-commit/elabx/ddev-worktrees)](https://github.com/elabx/ddev-worktrees/commits)
+[![release](https://img.shields.io/github/v/release/elabx/ddev-worktrees)](https://github.com/elabx/ddev-worktrees/releases/latest)
+
 # ddev-worktree
 
 A global DDEV add-on that clones an existing DDEV project (files + database) into a new directory. If the project is a git repo, it uses `git worktree` to create a linked worktree; otherwise it copies files with rsync.
@@ -284,20 +289,36 @@ Then upgrade to v1.1.1 or later, which uses a temp directory plus a cleanup trap
 
 ## Development
 
-The tests use [bats](https://github.com/bats-core/bats-core) and a fake `ddev`,
-so they run in seconds without Docker:
+Tests use [bats](https://github.com/bats-core/bats-core), the framework of
+DDEV's add-on template.
+
+**Unit tests** (`tests/unit/`) run both commands against a fake `ddev`, so they
+need no Docker and take seconds:
 
 ```bash
 brew install bats-core shellcheck   # or: apt-get install bats shellcheck
-bats tests/
-shellcheck commands/host/worktree commands/host/worktree-remove
+bats tests/unit
+shellcheck commands/host/worktree commands/host/worktree-remove tests/unit/*.bash
 ```
 
-GitHub Actions runs both on every pull request, on Linux and macOS.
+**End-to-end test** (`tests/test.bats`) installs the add-on into a real DDEV
+project, creates a clone, checks that it serves the site with the copied
+database, and removes it. It installs the commands into `~/.ddev`, so it only
+runs in CI unless you opt in. It needs `bats-assert`, `bats-file` and
+`bats-support` (`brew install bats-core/bats-core/bats-assert
+bats-core/bats-core/bats-file bats-core/bats-core/bats-support`):
+
+```bash
+DDEV_WORKTREE_E2E=1 bats tests/test.bats --filter-tags '!release'
+```
+
+GitHub Actions runs shellcheck and the unit tests (Linux and macOS) plus the
+end-to-end test (DDEV stable and HEAD, amd64 and arm64) on every pull request,
+on every push to `main` and nightly.
 
 ## Dependencies
 
-- **DDEV >= v1.24.0**
+- **DDEV >= v1.24.10**
 - **yq** (recommended) — for full YAML parsing of `.ddev/worktree-hooks.yaml`. Install via `brew install yq` or see [yq docs](https://github.com/mikefarah/yq). Without yq, the command falls back to basic grep/awk parsing with a warning.
 - **rsync** — for file copying (pre-installed on macOS and most Linux distributions)
 
@@ -306,3 +327,7 @@ GitHub Actions runs both on every pull request, on Linux and macOS.
 ```bash
 ddev add-on remove ddev-worktree
 ```
+
+## License
+
+MIT, see [LICENSE](LICENSE).

@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #ddev-generated
 
 ## Description: Remove a DDEV worktree clone created by 'ddev worktree'
